@@ -1,0 +1,93 @@
+#!/bin/bash
+
+# ==== SETUP (GANTI BAGIAN INI!) ====
+CF_Email="hendykusnandy@gmail.com"
+CF_Key="8ffca2a35ab4c6577c875232dda429b605cad"
+DOMAIN="nevacloud.dot-aja.my.id"    # DOMAIN UTAMA
+UUID=$(cat /proc/sys/kernel/random/uuid)
+WS_PATH="/vmess"
+
+# ==== UPDATE & TOOLS ====
+apt update -y
+apt install curl socat cron netcat unzip -y
+
+# ==== PASANG XRAY CORE ====
+bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+# ==== PASANG ACME.SH ====
+curl https://get.acme.sh | sh
+export CF_Email="$CF_Email"
+export CF_Key="$CF_Key"
+~/.acme.sh/acme.sh --issue --dns dns_cf -d "$DOMAIN" -d "*.$DOMAIN" --keylength ec-256 --force
+
+# ==== PASANG CERT KE XRAY ====
+mkdir -p /etc/xray
+~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
+--key-file /etc/xray/xray.key \
+--fullchain-file /etc/xray/xray.crt \
+--reloadcmd "systemctl restart xray"
+
+# ==== CONFIG XRAY ====
+cat > /etc/xray/config.json << END
+{
+  "inbounds": [{
+    "port": 443,
+    "protocol": "vmess",
+    "settings": {
+      "clients": [
+        {
+          "id": "$UUID",
+          "alterId": 0
+        }
+      ]
+    },
+    "streamSettings": {
+      "network": "ws",
+      "security": "tls",
+      "tlsSettings": {
+        "serverName": "$DOMAIN",
+        "certificates": [
+          {
+            "certificateFile": "/etc/xray/xray.crt",
+            "keyFile": "/etc/xray/xray.key"
+          }
+        ]
+      },
+      "wsSettings": {
+        "path": "$WS_PATH"
+      }
+    }
+  }],
+  "outbounds": [{
+    "protocol": "freedom",
+    "settings": {}
+  }]
+}
+END
+
+# ==== BUAT SERVICE & START XRAY ====
+systemctl enable xray
+systemctl restart xray
+
+# ==== BUAT LINK VMESS ====
+cat > /etc/xray/client.txt << EOF
+vmess://$(echo -n '{
+  "v": "2",
+  "ps": "INJECT-VMESS",
+  "add": "'"$DOMAIN"'",
+  "port": "443",
+  "id": "'"$UUID"'",
+  "aid": "0",
+  "net": "ws",
+  "type": "none",
+  "host": "'"$DOMAIN"'",
+  "path": "'"$WS_PATH"'",
+  "tls": "tls"
+}' | base64 -w 0)
+EOF
+
+clear
+echo "✅ Xray VMess TLS berhasil di-setup!"
+echo "🔑 UUID  : $UUID"
+echo "📄 Link VMess:"
+cat /etc/xray/client.txt
